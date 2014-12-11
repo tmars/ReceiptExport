@@ -1,14 +1,93 @@
 #coding=utf8
 import sys
-import openpyxl
-import xlrd
+import win32com.client as win32
+
+def excel_open():
+	global excel
+	excel = win32.gencache.EnsureDispatch('Excel.Application')
+
+def excel_quit():
+	global excel
+	excel.Application.Quit()
+
+def load_book(filename):
+	return book(excel.Workbooks.Open(filename))
+
+
+class book():
+
+	def __init__(self, wb):
+		self.wb = wb
+		
+	def sheets(self, ind):
+		return sheet(self.wb.Worksheets(ind))
+
+	@property
+	def active(self):
+		return self.sheets(1)
+
+	def save(self, filename):
+		self.wb.Save()
+
+class sheet():
+
+	def __init__(self, ws):
+		self.ws = ws
+		used = self.ws.UsedRange
+
+	@property
+	def nrows(self):
+		used = self.ws.UsedRange
+		return used.Row + used.Rows.Count - 1
+
+	@property
+	def ncols(self):
+		used = self.ws.UsedRange
+		return used.Column + used.Columns.Count - 1
+
+	def cell(self, row, column):
+		return xlcell(self.ws.Cells(row,column))
+
+class xlcell():
+
+	def __init__(self, cl):
+		self.cl = cl
+
+	@property
+	def data_type(self):
+		return 's' if self.cl.NumberFormat == u'Основной' else 'n'
+
+	@property
+	def value(self):
+		return self.cl.Value
+
+	@value.setter
+	def value(self, val):
+		self.cl.Value = val
+		
+	@property
+	def formula(self):
+		return self.cl.Formula
+
+	@formula.setter
+	def formula(self, val):
+		self.cl.Formula = val
+
+	@staticmethod
+	def get_column_letter(num):
+		letters = ''
+		while num:
+			mod = num % 26
+			num = num // 26
+			letters += chr(mod + 64)
+		return ''.join(reversed(letters))
 
 def find_columns(ws, labels, from_row = 1):
-	for row in xrange(from_row,from_row+MT_ROW_LIMIT):
+	for row in xrange(from_row, ws.nrows):
 		col_inds = {}
-		for col in xrange(1,MT_COL_LIMIT):
+		for col in xrange(1, ws.ncols):
 			cell = ws.cell(row = row, column = col)
-			if cell.value in [None, ""] or cell.data_type != 's':
+			if cell.value in [None, ""]:
 				continue
 			value = unicode(cell.value).lower()
 			for l in set(labels) - set(col_inds.keys()):
@@ -23,7 +102,7 @@ def find_columns(ws, labels, from_row = 1):
 def find_row(ws, from_row, col_inds, funcs, row_count=1):
 	prev_row = from_row -1
 	rcount = 0
-	for row in xrange(from_row, from_row+MT_ROW_LIMIT2):
+	for row in xrange(from_row, ws.nrows):
 		ret = True
 		for l in col_inds:
 			if not funcs[l](ws.cell(row = row, column = col_inds[l])):
@@ -65,10 +144,11 @@ def open_xls_as_xlsx(filename):
 # возвращает список товаров
 def get_products(filename):
 	# открываем файл
-	if filename[-4:] == '.xls':
-		wb = open_xls_as_xlsx(filename)
-	else:
-		wb = openpyxl.load_workbook(filename)
+	# if filename[-4:] == '.xls':
+	# 	wb = open_xls_as_xlsx(filename)
+	# else:
+	# 	wb = openpyxl.load_workbook(filename)
+	wb = load_book(filename)
 	ws = wb.active
 	
 	# получаем номер строки и столбцов с заголовками
@@ -89,35 +169,32 @@ def get_products(filename):
 # сохранение списка товаров в файл
 def save_products(filename, products):
 	# открываем файл
-	wb = openpyxl.load_workbook(filename,guess_types=False,keep_vba=True)
+	wb = load_book(filename)
 	ws = wb.active
 	
 	# получаем номер строки и столбцов с заголовками
 	lrow_ind, col_inds = find_columns(ws, ["price", "count", "name", "sum"])
-	print 'ab',lrow_ind, col_inds
 	sum_col_ind = col_inds["sum"]
 	del col_inds["sum"]
 
 	# получаем номер последней строки после товаров
 	row_ind = find_row(ws, lrow_ind+1, 	col_inds, MT_FUNCS_CLEAN, row_count=2)
-	print 'sd',row_ind
 	row_ind -= 1
 	
 	# записываем данные
 	first_row_ind = row_ind
 	for prod in products:
 		for key in prod:
-			print 'r', row_ind, 'c', col_inds[key]
-			ws.cell(row = row_ind, column = col_inds[key]).value = prod[key]
+			ws.ws.Cells(row_ind, col_inds[key]).Value = prod[key]
 		row_ind += 1
 
 	# подбиваем сумму
-	letter = openpyxl.cell.get_column_letter(sum_col_ind)
-	cell = ws.cell(row = row_ind, column = sum_col_ind)
-	cell.value = "=SUBTOTAL(109,%s%s:%s%s)" % (letter, first_row_ind, letter, row_ind-1) 
+	letter = xlcell.get_column_letter(sum_col_ind)
+	cell = ws.ws.Cells(row_ind, sum_col_ind)
+	cell.Formula = "=SUBTOTAL(109,%s%s:%s%s)" % (letter, first_row_ind, letter, row_ind-1) 
 	
 	# для защищенных полей обязательно почистить атрибуты
-	ws.formula_attributes[cell.coordinate] = {}
+	#ws.formula_attributes[cell.coordinate] = {}
 	
 	# сохраняем в файл
 	wb.save(filename+'_new.xlsx')
